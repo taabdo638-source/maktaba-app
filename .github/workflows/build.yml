@@ -1,0 +1,32 @@
+name: بناء برنامج نظام المكتبة
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: تنزيل الكود
+        uses: actions/checkout@v4
+
+      - name: تجهيز Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: تثبيت المكتبات
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install customtkinter pyinstaller
+
+      - name: بناء الملف التنفيذي
+        run: pyinstaller --onefile --windowed --name "نظام_المكتبة" maktaba_app.py
+
+      - name: رفع الملف الجاهز
+        uses: actions/upload-artifact@v4
+        with:
+          name: نظام_المكتبة-windows
+          path: dist/*.exe
