@@ -1,46 +1,133 @@
 import customtkinter as ctk
 import sqlite3
+import os
 from datetime import datetime
 from tkinter import messagebox, ttk
+from PIL import Image, ImageDraw
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 CATEGORIES = ["أدوات مدرسية", "إعلام آلي", "أخرى"]
 
+NAV_ICON_SPECS = {
+    "home": ((63, 240, 224), (79, 125, 255), "home"),
+    "products": ((79, 125, 255), (168, 85, 247), "box"),
+    "customers": ((168, 85, 247), (255, 93, 122), "people"),
+    "sales": ((51, 209, 146), (63, 240, 224), "receipt"),
+}
+
+
+def _lerp(a, b, t):
+    return a + (b - a) * t
+
+
+def make_icon_badge(size, color1, color2, glyph):
+    """يولّد شارة دائرية متدرجة اللون مع رمز أبيض بسيط بداخلها (بدون الحاجة لملفات صور خارجية)."""
+    scale = 4
+    big = size * scale
+    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    px = img.load()
+    cx = cy = big / 2
+    r = big / 2
+
+    for y in range(big):
+        for x in range(big):
+            dx = x - cx
+            dy = y - cy
+            dist = (dx * dx + dy * dy) ** 0.5
+            if dist <= r:
+                t = (x + y) / (2 * big)
+                col = [_lerp(color1[i], color2[i], t) for i in range(3)]
+                hl_dist = ((x - big * 0.32) ** 2 + (y - big * 0.28) ** 2) ** 0.5
+                hl = max(0.0, 1 - hl_dist / (big * 0.55))
+                col = [min(255, col[i] + hl * 80) for i in range(3)]
+                sh_dist = ((x - big * 0.68) ** 2 + (y - big * 0.75) ** 2) ** 0.5
+                sh = max(0.0, 1 - sh_dist / (big * 0.6))
+                col = [max(0, col[i] - sh * 35) for i in range(3)]
+                px[x, y] = (int(col[0]), int(col[1]), int(col[2]), 255)
+
+    draw = ImageDraw.Draw(img)
+    glyph_color = (255, 255, 255, 255)
+    lw = max(2, int(big * 0.045))
+
+    if glyph == "home":
+        draw.polygon(
+            [(big * 0.5, big * 0.20), (big * 0.24, big * 0.46), (big * 0.76, big * 0.46)],
+            fill=glyph_color,
+        )
+        draw.rectangle([big * 0.32, big * 0.46, big * 0.68, big * 0.76], fill=glyph_color)
+    elif glyph == "box":
+        draw.rounded_rectangle(
+            [big * 0.26, big * 0.30, big * 0.74, big * 0.72], radius=big * 0.03,
+            outline=glyph_color, width=lw,
+        )
+        draw.line([(big * 0.26, big * 0.46), (big * 0.74, big * 0.46)], fill=glyph_color, width=lw)
+        draw.line([(big * 0.5, big * 0.30), (big * 0.5, big * 0.46)], fill=glyph_color, width=lw)
+    elif glyph == "people":
+        draw.ellipse([big * 0.28, big * 0.24, big * 0.46, big * 0.42], fill=glyph_color)
+        draw.ellipse([big * 0.52, big * 0.28, big * 0.68, big * 0.44], fill=glyph_color)
+        draw.pieslice([big * 0.20, big * 0.42, big * 0.52, big * 0.78], 180, 360, fill=glyph_color)
+        draw.pieslice([big * 0.46, big * 0.46, big * 0.76, big * 0.78], 180, 360, fill=glyph_color)
+    elif glyph == "receipt":
+        draw.rounded_rectangle(
+            [big * 0.34, big * 0.20, big * 0.66, big * 0.80], radius=big * 0.03,
+            outline=glyph_color, width=lw,
+        )
+        for yfrac in (0.34, 0.46, 0.58):
+            draw.line(
+                [(big * 0.41, big * yfrac), (big * 0.59, big * yfrac)],
+                fill=glyph_color, width=max(2, int(big * 0.03)),
+            )
+
+    return img.resize((size, size), Image.LANCZOS)
+
 
 class MaktabaApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("نظام إدارة المكتبة والخدمات")
+        self.title("نقطة MB — نظام إدارة المتجر")
         self.geometry("1150x720")
         self.minsize(1050, 650)
 
         self.create_database()
         self.setup_treeview_style()
+        self.nav_icons = self.build_nav_icons()
 
         self.selected_product_id = None
         self.selected_customer_id = None
         self.cart = []  # each item: {product_id, name, qty, unit_price, buy_price}
 
-        self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
+        self.sidebar = ctk.CTkFrame(self, width=210, corner_radius=0)
         self.sidebar.pack(side="right", fill="y")
 
-        ctk.CTkLabel(self.sidebar, text="نظام المكتبة", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=20)
+        ctk.CTkLabel(self.sidebar, text="نقطة MB", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=20)
 
         self.nav_buttons = {}
-        self.nav_buttons["home"] = ctk.CTkButton(self.sidebar, text="الرئيسية", command=self.show_home)
-        self.nav_buttons["home"].pack(pady=10, padx=20, fill="x")
+        self.nav_buttons["home"] = ctk.CTkButton(
+            self.sidebar, text="الرئيسية", image=self.nav_icons["home"],
+            compound="right", anchor="e", command=self.show_home,
+        )
+        self.nav_buttons["home"].pack(pady=8, padx=18, fill="x")
 
-        self.nav_buttons["products"] = ctk.CTkButton(self.sidebar, text="المنتجات", command=self.show_products)
-        self.nav_buttons["products"].pack(pady=10, padx=20, fill="x")
+        self.nav_buttons["products"] = ctk.CTkButton(
+            self.sidebar, text="المنتجات", image=self.nav_icons["products"],
+            compound="right", anchor="e", command=self.show_products,
+        )
+        self.nav_buttons["products"].pack(pady=8, padx=18, fill="x")
 
-        self.nav_buttons["customers"] = ctk.CTkButton(self.sidebar, text="الزبائن والديون", command=self.show_customers)
-        self.nav_buttons["customers"].pack(pady=10, padx=20, fill="x")
+        self.nav_buttons["customers"] = ctk.CTkButton(
+            self.sidebar, text="الزبائن والديون", image=self.nav_icons["customers"],
+            compound="right", anchor="e", command=self.show_customers,
+        )
+        self.nav_buttons["customers"].pack(pady=8, padx=18, fill="x")
 
-        self.nav_buttons["sales"] = ctk.CTkButton(self.sidebar, text="تسجيل بيع", command=self.show_sales)
-        self.nav_buttons["sales"].pack(pady=10, padx=20, fill="x")
+        self.nav_buttons["sales"] = ctk.CTkButton(
+            self.sidebar, text="تسجيل بيع", image=self.nav_icons["sales"],
+            compound="right", anchor="e", command=self.show_sales,
+        )
+        self.nav_buttons["sales"].pack(pady=8, padx=18, fill="x")
 
         self.main_frame = ctk.CTkFrame(self, corner_radius=0)
         self.main_frame.pack(side="left", fill="both", expand=True)
@@ -67,6 +154,112 @@ class MaktabaApp(ctk.CTk):
         )
         style.configure("Treeview.Heading", background="#1f6aa5", foreground="white", font=("Arial", 12, "bold"))
         style.map("Treeview", background=[("selected", "#144870")])
+
+    def build_nav_icons(self):
+        icons = {}
+        for key, (c1, c2, glyph) in NAV_ICON_SPECS.items():
+            pil_img = make_icon_badge(30, c1, c2, glyph)
+            icons[key] = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(30, 30))
+        return icons
+
+    def open_file_for_printing(self, path):
+        """يفتح الملف بالبرنامج الافتراضي (المتصفح لملفات html) ليتمكن المستخدم من الطباعة مباشرة (Ctrl+P)."""
+        try:
+            os.startfile(path)  # يعمل على ويندوز
+        except AttributeError:
+            import webbrowser
+            webbrowser.open(f"file://{os.path.abspath(path)}")
+        except Exception as e:
+            messagebox.showerror("خطأ", f"تعذّر فتح الملف تلقائيًا:\n{e}\n\nمساره: {path}")
+
+    def generate_invoice_html(self, sale_id, customer_name, items, total, payment_type, date):
+        os.makedirs("invoices", exist_ok=True)
+        rows_html = "".join(
+            f"""<tr>
+                    <td>{item['name']}</td>
+                    <td>{item['qty']}</td>
+                    <td>{item['unit_price']:.2f}</td>
+                    <td>{item['qty'] * item['unit_price']:.2f}</td>
+                </tr>"""
+            for item in items
+        )
+        html = f"""<!DOCTYPE html>
+<html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+<title>فاتورة رقم {sale_id}</title>
+<style>
+  body{{ font-family: Arial, Tahoma, sans-serif; padding:30px; color:#111; }}
+  h1{{ text-align:center; margin-bottom:0; color:#2a3ea8; }}
+  .sub{{ text-align:center; color:#666; margin-top:4px; margin-bottom:24px; }}
+  table{{ width:100%; border-collapse:collapse; margin-bottom:20px; }}
+  th, td{{ border:1px solid #ccc; padding:8px; text-align:center; font-size:14px; }}
+  th{{ background:#2a3ea8; color:#fff; }}
+  .info{{ display:flex; justify-content:space-between; margin-bottom:16px; font-size:14px; }}
+  .total{{ text-align:left; font-size:20px; font-weight:bold; margin-top:10px; }}
+  .footer{{ text-align:center; margin-top:40px; color:#888; font-size:13px; }}
+  @media print {{ button{{ display:none; }} }}
+</style></head>
+<body>
+  <h1>نقطة MB</h1>
+  <div class="sub">من الدفتر إلى الطباعة، عندنا كل شيء</div>
+  <div class="info">
+    <span>رقم الفاتورة: {sale_id}</span>
+    <span>التاريخ: {date}</span>
+    <span>الزبون: {customer_name}</span>
+    <span>طريقة الدفع: {payment_type}</span>
+  </div>
+  <table>
+    <tr><th>المنتج</th><th>الكمية</th><th>سعر الوحدة</th><th>المجموع</th></tr>
+    {rows_html}
+  </table>
+  <div class="total">الإجمالي: {total:.2f} د.ج</div>
+  <div class="footer">شكرًا لتعاملكم معنا</div>
+  <button onclick="window.print()" style="display:block;margin:24px auto;padding:10px 20px;">طباعة</button>
+</body></html>"""
+        path = os.path.join("invoices", f"invoice_{sale_id}.html")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(html)
+        return path
+
+    def generate_debtors_report_html(self):
+        self.cursor.execute("SELECT name, phone, debt FROM customers WHERE debt > 0 ORDER BY debt DESC")
+        debtors = self.cursor.fetchall()
+        rows_html = "".join(
+            f"<tr><td>{name}</td><td>{phone or '-'}</td><td>{debt:.2f}</td></tr>"
+            for name, phone, debt in debtors
+        )
+        total_debt = sum(d[2] for d in debtors)
+        html = f"""<!DOCTYPE html>
+<html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+<title>قائمة الديون</title>
+<style>
+  body{{ font-family: Arial, Tahoma, sans-serif; padding:30px; color:#111; }}
+  h1{{ text-align:center; color:#2a3ea8; }}
+  .sub{{ text-align:center; color:#666; margin-bottom:24px; }}
+  table{{ width:100%; border-collapse:collapse; margin-bottom:20px; }}
+  th, td{{ border:1px solid #ccc; padding:8px; text-align:center; font-size:14px; }}
+  th{{ background:#2a3ea8; color:#fff; }}
+  .total{{ text-align:left; font-size:18px; font-weight:bold; }}
+  @media print {{ button{{ display:none; }} }}
+</style></head>
+<body>
+  <h1>نقطة MB — قائمة الزبائن المدينين</h1>
+  <div class="sub">بتاريخ: {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
+  <table>
+    <tr><th>الاسم</th><th>الهاتف</th><th>الدين (د.ج)</th></tr>
+    {rows_html if rows_html else '<tr><td colspan="3">لا يوجد زبائن مدينون حاليًا</td></tr>'}
+  </table>
+  <div class="total">إجمالي الديون: {total_debt:.2f} د.ج</div>
+  <button onclick="window.print()" style="display:block;margin:24px auto;padding:10px 20px;">طباعة</button>
+</body></html>"""
+        os.makedirs("invoices", exist_ok=True)
+        path = os.path.join("invoices", "debtors_report.html")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(html)
+        return path
+
+    def print_debtors_report(self):
+        path = self.generate_debtors_report_html()
+        self.open_file_for_printing(path)
 
     def set_active_nav(self, key):
         for name, btn in self.nav_buttons.items():
@@ -159,7 +352,7 @@ class MaktabaApp(ctk.CTk):
     def show_home(self):
         self.set_active_nav("home")
         self.clear_main()
-        ctk.CTkLabel(self.main_frame, text="مرحباً بك في نظام إدارة المكتبة",
+        ctk.CTkLabel(self.main_frame, text="مرحباً بك في نقطة MB",
                      font=ctk.CTkFont(size=24, weight="bold")).pack(pady=30)
 
         self.cursor.execute("SELECT COUNT(*) FROM products")
@@ -400,6 +593,8 @@ class MaktabaApp(ctk.CTk):
                       fg_color="#b5432e").pack(side="right", padx=5)
         ctk.CTkButton(btns, text="تفريغ الحقول", command=self.clear_customer_fields,
                       fg_color="gray40").pack(side="right", padx=5)
+        ctk.CTkButton(btns, text="🖨️ طباعة قائمة الديون", command=self.print_debtors_report,
+                      fg_color="#2a3ea8").pack(side="right", padx=5)
 
         payment_frame = ctk.CTkFrame(self.main_frame)
         payment_frame.pack(pady=(0, 10), padx=20, fill="x")
@@ -538,24 +733,45 @@ class MaktabaApp(ctk.CTk):
 
         ctk.CTkLabel(self.main_frame, text="تسجيل عملية بيع", font=ctk.CTkFont(size=22, weight="bold")).pack(pady=15)
 
+        # بحث عن منتج
+        search_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        search_frame.pack(padx=20, pady=(0, 4), fill="x")
+        ctk.CTkLabel(search_frame, text="بحث:").pack(side="right", padx=(0, 5))
+        self.sale_product_search = ctk.CTkEntry(search_frame, placeholder_text="ابحث عن منتج للبيع...")
+        self.sale_product_search.pack(side="right", padx=5, fill="x", expand=True)
+        self.sale_product_search.bind("<KeyRelease>", lambda e: self.filter_sale_products())
+
         # اختيار منتج وإضافته للسلة
         add_frame = ctk.CTkFrame(self.main_frame)
         add_frame.pack(pady=10, padx=20, fill="x")
 
         self.cursor.execute("SELECT id, name, sell_price, quantity, buy_price FROM products ORDER BY name")
         self.available_products = self.cursor.fetchall()
-        product_labels = [f"{p[1]} — {p[2]:.2f} د.ج (متوفر: {p[3]})" for p in self.available_products]
+        self.product_label_map = {
+            f"{p[1]} — {p[2]:.2f} د.ج (متوفر: {p[3]})": p for p in self.available_products
+        }
+        all_labels = list(self.product_label_map.keys()) or ["لا توجد منتجات مسجلة"]
 
-        if not product_labels:
-            product_labels = ["لا توجد منتجات مسجلة"]
-
-        self.sale_product_menu = ctk.CTkOptionMenu(add_frame, values=product_labels, width=320)
+        self.sale_product_menu = ctk.CTkOptionMenu(add_frame, values=all_labels, width=320)
         self.sale_product_menu.pack(side="right", padx=5, pady=10)
 
         self.sale_qty = ctk.CTkEntry(add_frame, placeholder_text="الكمية", width=80)
         self.sale_qty.pack(side="right", padx=5, pady=10)
 
         ctk.CTkButton(add_frame, text="أضف للسلة", command=self.add_to_cart).pack(side="right", padx=10)
+
+    def filter_sale_products(self):
+        term = self.sale_product_search.get().strip().lower()
+        if term:
+            filtered = [label for label, p in self.product_label_map.items() if term in p[1].lower()]
+        else:
+            filtered = list(self.product_label_map.keys())
+
+        if not filtered:
+            filtered = ["لا توجد نتائج مطابقة"]
+
+        self.sale_product_menu.configure(values=filtered)
+        self.sale_product_menu.set(filtered[0])
 
         # سلة المشتريات
         cart_columns = ("name", "qty", "unit_price", "subtotal")
@@ -602,8 +818,11 @@ class MaktabaApp(ctk.CTk):
             messagebox.showerror("خطأ", "أدخل كمية أكبر من صفر")
             return
 
-        index = self.sale_product_menu.cget("values").index(self.sale_product_menu.get())
-        product_id, name, sell_price, available_qty, buy_price = self.available_products[index]
+        selected_label = self.sale_product_menu.get()
+        if selected_label not in self.product_label_map:
+            messagebox.showerror("خطأ", "اختر منتجًا صالحًا من القائمة")
+            return
+        product_id, name, sell_price, available_qty, buy_price = self.product_label_map[selected_label]
 
         already_in_cart = sum(item["qty"] for item in self.cart if item["product_id"] == product_id)
         if already_in_cart + qty > available_qty:
@@ -691,7 +910,15 @@ class MaktabaApp(ctk.CTk):
                                  (current_debt + total, customer_id))
 
         self.conn.commit()
-        messagebox.showinfo("نجاح", f"تم تسجيل عملية البيع بنجاح. الإجمالي: {total:.2f} د.ج")
+
+        customer_name = "بدون زبون (نقدي)"
+        if customer_id is not None:
+            customer_name = customer_choice.split(" - ", 1)[1]
+
+        invoice_path = self.generate_invoice_html(sale_id, customer_name, self.cart, total, pay_type, date)
+
+        messagebox.showinfo("نجاح", f"تم تسجيل عملية البيع بنجاح. الإجمالي: {total:.2f} د.ج\nتم إنشاء الفاتورة وفتحها للطباعة.")
+        self.open_file_for_printing(invoice_path)
         self.show_sales()
 
 
