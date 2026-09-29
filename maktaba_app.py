@@ -799,11 +799,51 @@ class MaktabaApp(ctk.CTk):
         self.sale_customer_menu = ctk.CTkOptionMenu(checkout_frame, values=customer_labels, width=220)
         self.sale_customer_menu.pack(side="right", padx=5, pady=10)
 
+        ctk.CTkButton(checkout_frame, text="➕ زبون جديد", width=90, fg_color="#5a3ea8",
+                      command=self.open_quick_add_customer).pack(side="right", padx=5, pady=10)
+
         self.payment_type = ctk.CTkOptionMenu(checkout_frame, values=["نقدي", "كريدي"])
         self.payment_type.pack(side="right", padx=5, pady=10)
 
         ctk.CTkButton(checkout_frame, text="إتمام عملية البيع", command=self.save_sale,
                       fg_color="green").pack(side="right", padx=10)
+
+    def open_quick_add_customer(self):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("إضافة زبون جديد")
+        dialog.geometry("340x220")
+        dialog.grab_set()  # يبقي التركيز على هذه النافذة حتى يتم إغلاقها
+
+        ctk.CTkLabel(dialog, text="إضافة زبون جديد أثناء عملية البيع",
+                     font=ctk.CTkFont(size=15, weight="bold")).pack(pady=(18, 14))
+
+        name_entry = ctk.CTkEntry(dialog, placeholder_text="اسم الزبون", width=260)
+        name_entry.pack(pady=6)
+        phone_entry = ctk.CTkEntry(dialog, placeholder_text="رقم الهاتف (اختياري)", width=260)
+        phone_entry.pack(pady=6)
+
+        def save_and_close():
+            name = name_entry.get().strip()
+            phone = phone_entry.get().strip()
+            if not name:
+                messagebox.showerror("خطأ", "أدخل اسم الزبون", parent=dialog)
+                return
+
+            self.cursor.execute("INSERT INTO customers (name, phone, debt) VALUES (?, ?, 0)", (name, phone))
+            self.conn.commit()
+            new_id = self.cursor.lastrowid
+
+            # تحديث قائمة الزبائن في شاشة البيع واختيار الزبون الجديد مباشرة
+            self.cursor.execute("SELECT id, name FROM customers ORDER BY name")
+            customers = self.cursor.fetchall()
+            customer_labels = ["بدون زبون (نقدي فقط)"] + [f"{c[0]} - {c[1]}" for c in customers]
+            self.sale_customer_menu.configure(values=customer_labels)
+            self.sale_customer_menu.set(f"{new_id} - {name}")
+
+            dialog.destroy()
+
+        ctk.CTkButton(dialog, text="حفظ", command=save_and_close, fg_color="green", width=260).pack(pady=(16, 6))
+        ctk.CTkButton(dialog, text="إلغاء", command=dialog.destroy, fg_color="gray40", width=260).pack()
 
     def add_to_cart(self):
         if not self.available_products:
